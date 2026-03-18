@@ -257,6 +257,23 @@ int RdmaContext::registerMemoryRegionInternal(void *addr, size_t length,
         mrMeta.mr = ibv_reg_dmabuf_mr(pd_, 0 /* offset */, length,
                                       (uintptr_t)addr, dmabuf_fd, access);
     }
+#elif defined(USE_XPU)
+    // Intel XPU: use Level Zero IPC handle to export a DMA-BUF fd,
+    // then register it via ibv_reg_dmabuf_mr for GPU-direct RDMA.
+    if (mooncake::xpu::isDeviceMemory(addr)) {
+        int dmabuf_fd = mooncake::xpu::exportDmaBufFd(addr, length);
+        if (dmabuf_fd < 0) {
+            LOG(ERROR) << "Failed to export DMA-BUF fd for XPU memory "
+                       << (uintptr_t)addr;
+            return ERR_CONTEXT;
+        }
+        mrMeta.addr = addr;
+        mrMeta.mr = ibv_reg_dmabuf_mr(pd_, 0 /* offset */, length,
+                                      (uintptr_t)addr, dmabuf_fd, access);
+    } else {
+        mrMeta.addr = addr;
+        mrMeta.mr = ibv_reg_mr(pd_, addr, length, access);
+    }
 #else
     mrMeta.addr = addr;
     mrMeta.mr = ibv_reg_mr(pd_, addr, length, access);

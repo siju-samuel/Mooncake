@@ -10,9 +10,11 @@
 #include "gpu_vendor/musa.h"
 #elif defined(USE_UBSHMEM)
 #include "gpu_vendor/ubshmem.h"
+#elif defined(USE_XPU)
+#include "gpu_vendor/xpu.h"
 #endif
 
-#if !defined(USE_HIP) && !defined(USE_MUSA) && !defined(USE_UBSHMEM)
+#if !defined(USE_HIP) && !defined(USE_MUSA) && !defined(USE_UBSHMEM) && !defined(USE_XPU)
 #include <string>
 const static std::string GPU_PREFIX = "cuda:";
 #endif

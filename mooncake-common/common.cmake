@@ -69,6 +69,7 @@ option(USE_ASCEND_HETEROGENEOUS "option for transferring between ascend npu and 
 option(USE_MNNVL "option for using Multi-Node NVLink transport" OFF)
 option(USE_CXL "option for using CXL protocol" OFF)
 option(USE_EFA "option for using AWS EFA transport" OFF)
+option(USE_XPU "option for enabling gpu features for Intel XPU (Level Zero)" OFF)
 
 if (USE_EFA)
   # Find libfabric headers and library; default to AWS EFA installer path
@@ -165,6 +166,31 @@ if (USE_HIP)
             "hipify-perl not found.\n"
             "Please ensure the ROCm or HIP SDK is installed and in your PATH.")
   endif()
+endif()
+
+if (USE_XPU)
+  # Find Level Zero headers and library
+  find_path(LEVEL_ZERO_INCLUDE_DIR level_zero/ze_api.h
+    HINTS $ENV{CONDA_PREFIX}/include
+          /usr/include
+    PATH_SUFFIXES include)
+  find_library(LEVEL_ZERO_LIBRARY ze_loader
+    HINTS $ENV{CONDA_PREFIX}/lib
+          /usr/lib64
+          /usr/lib
+    PATH_SUFFIXES lib lib64)
+
+  if (NOT LEVEL_ZERO_INCLUDE_DIR OR NOT LEVEL_ZERO_LIBRARY)
+    message(FATAL_ERROR "Level Zero not found. Install level-zero-devel or set LEVEL_ZERO_INCLUDE_DIR/LEVEL_ZERO_LIBRARY.")
+  endif()
+
+  get_filename_component(LEVEL_ZERO_LIB_DIR ${LEVEL_ZERO_LIBRARY} DIRECTORY)
+  include_directories(${LEVEL_ZERO_INCLUDE_DIR})
+  link_directories(${LEVEL_ZERO_LIB_DIR})
+  add_compile_definitions(USE_XPU)
+  message(STATUS "Intel XPU (Level Zero) support is enabled")
+  message(STATUS "  Level Zero include: ${LEVEL_ZERO_INCLUDE_DIR}")
+  message(STATUS "  Level Zero library: ${LEVEL_ZERO_LIBRARY}")
 endif()
 
 # This function converts given CUDA source files into HIP-compatible

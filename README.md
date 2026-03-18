@@ -96,7 +96,7 @@ Mooncake establishes a full-stack, Tensor-oriented AI infrastructure where Tenso
 
 ### Use Transfer Engine Standalone ([Guide](https://kvcache-ai.github.io/Mooncake/design/transfer-engine/index.html))
 
-Transfer Engine is a high-performance data transfer framework. Transfer Engine provides a unified interface to transfer data from DRAM, VRAM or NVMe, while the technical details related to hardware are hidden. Transfer Engine supports multiple communication protocols including TCP, RDMA (InfiniBand/RoCEv2/eRDMA/NVIDIA GPUDirect), NVMe over Fabric (NVMe-of), NVLink, HIP, CXL, and Ascend. For a complete list of supported protocols and configuration guide, see the [Supported Protocols Documentation](https://kvcache-ai.github.io/Mooncake/getting_started/supported-protocols.html).
+Transfer Engine is a high-performance data transfer framework. Transfer Engine provides a unified interface to transfer data from DRAM, VRAM or NVMe, while the technical details related to hardware are hidden. Transfer Engine supports multiple communication protocols including TCP, RDMA (InfiniBand/RoCEv2/eRDMA/NVIDIA GPUDirect), NVMe over Fabric (NVMe-of), NVLink, HIP, CXL, Intel XPU (Level Zero), and Ascend. For a complete list of supported protocols and configuration guide, see the [Supported Protocols Documentation](https://kvcache-ai.github.io/Mooncake/getting_started/supported-protocols.html).
 
 #### Highlights
 - **Efficient use of multiple RDMA NIC devices.** Transfer Engine supports the use of multiple RDMA NIC devices to achieve the *aggregation of transfer bandwidth*.
@@ -252,6 +252,45 @@ The build and installation steps are as follows:
    make -j
    sudo make install # optional, make it ready to be used by vLLM/SGLang
    ```
+
+### Build with Intel XPU support (experimental)
+
+Mooncake supports Intel GPUs (e.g., Battlemage, Data Center GPU Max) via oneAPI Level Zero.
+XPU builds use the existing RDMA and TCP transports through a cuda-alike shim layer—no
+separate "XPU transport" is needed.
+
+**Prerequisites:**
+- Intel oneAPI 2025.2+ (`source /opt/intel/oneapi/setvars.sh`)
+- Level Zero headers and `libze_loader` (from oneAPI or conda-forge `level-zero-devel`)
+- GCC 13+ or a C++20-capable compiler
+- RDMA stack (libibverbs / rdma-core) for GPU-Direct RDMA via DMA-BUF
+
+**Recommended conda setup:**
+```bash
+conda create -n mooncake-xpu python=3.12
+conda activate mooncake-xpu
+conda install -c conda-forge level-zero-devel cmake gxx_linux-64 \
+    glog gtest jsoncpp yaml-cpp boost-cpp xxhash jemalloc libcurl pybind11
+```
+
+**Build:**
+```bash
+source /opt/intel/oneapi/setvars.sh
+conda activate mooncake-xpu
+bash scripts/build_xpu.sh          # builds into build-xpu/
+```
+
+Or manually:
+```bash
+cmake -B build-xpu -DUSE_XPU=ON -DUSE_TCP=ON -DUSE_HTTP=ON \
+      -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+cmake --build build-xpu -j$(nproc)
+```
+
+**Run tests (Slurm):**
+```bash
+sbatch scripts/slurm_xpu_test.sh   # partition: bmg-B60
+```
 
 
 <h2 id="milestones"> 🛣️ Incoming Milestones</h2>
