@@ -26,11 +26,45 @@ _ZERO_COPY_COMBINE_UNSUPPORTED = (
 )
 
 
+def _xpu_available() -> bool:
+    return hasattr(torch, "xpu") and torch.xpu.is_available()
+
+
+# Intel XPU (Level Zero / SYCL).  There is no IBGDA and no CUDA IPC there, so
+# the EP kernels cannot be used; the transport is provided by the XPU backend
+# selected in `_xpu_backend.py` (ISHMEM low-latency kernels when available,
+# otherwise the collective fallback below).
+_USE_XPU = _env_enabled("MOONCAKE_EP_USE_XPU", default=_xpu_available())
+
+
+def _device_module():
+    """The torch device module for the accelerator this build targets."""
+    return torch.xpu if _USE_XPU else torch.cuda
+
+
+def _accelerator_type() -> str:
+    return "xpu" if _USE_XPU else "cuda"
+
+
+def _current_device() -> torch.device:
+    """Current accelerator device, usable as a tensor `device=` argument."""
+    if _USE_XPU:
+        return torch.device("xpu", torch.xpu.current_device())
+    return torch.device("cuda")
+
+
 def _native_current_stream_ptr() -> int:
+    if _USE_XPU:
+        return int(torch.xpu.current_stream().sycl_queue)
     return int(torch.cuda.current_stream().cuda_stream)
 
 
 def _wait_native_event_on_current_stream(event: "ep.EventHandle") -> None:
+    # The XPU transports return their own event shims rather than a native
+    # ep.EventHandle, and those take no stream argument.
+    if _USE_XPU:
+        event.current_stream_wait()
+        return
     event.current_stream_wait(_native_current_stream_ptr())
 
 
@@ -99,14 +133,35 @@ class Buffer:
         num_ep_buffer_bytes: int = 0,
         disable_p2p: bool = False,
     ):
-        from mooncake import ep
-
-        # Initialize the CPP runtime
         self.rank = group.rank()
         self.group_size = group.size()
         self.group = group
         self.num_ep_buffer_bytes = num_ep_buffer_bytes
         self.backend = self.group
+        self.device = _current_device()
+        self._fallback_next_combine_buffer: Optional[torch.Tensor] = None
+        self._maca_phase_token: Optional[torch.Tensor] = None
+        self._maca_phase_recv_tokens: Optional[List[torch.Tensor]] = None
+        self._warned_active_ranks_without_mooncake_backend = False
+        # Optional XPU transport (ISHMEM low-latency kernels).  None means the
+        # collective fallback below carries the traffic.
+        self._xpu_backend = None
+
+        if _USE_XPU:
+            # No IBGDA and no CUDA IPC on Level Zero: the CUDA EP extension is
+            # neither buildable nor loadable here.
+            self.runtime = None
+            from mooncake._xpu_backend import make_xpu_backend
+
+            self._xpu_backend = make_xpu_backend(
+                group, num_ep_buffer_bytes, self.device
+            )
+            self._use_fallback = self._xpu_backend is None
+            return
+
+        from mooncake import ep
+
+        # Initialize the CPP runtime
         # NIC auto-detection happens inside ep.Buffer via Topology::discover().
         self.runtime = ep.Buffer(
             self.rank, self.group_size, num_ep_buffer_bytes, disable_p2p
@@ -115,10 +170,6 @@ class Buffer:
         # Note: `sync_nvlink_ipc_handles()` can mutate C++ `ibgda_disabled_` (True->False when
         # P2P+IPC succeeds for all ranks). We re-evaluate after IPC sync below.
         self._use_fallback = bool(self.runtime.ibgda_disabled())
-        self._fallback_next_combine_buffer: Optional[torch.Tensor] = None
-        self._maca_phase_token: Optional[torch.Tensor] = None
-        self._maca_phase_recv_tokens: Optional[List[torch.Tensor]] = None
-        self._warned_active_ranks_without_mooncake_backend = False
         self.connect()
 
     def _maca_phase_fence(self, send_event: Optional[Any] = None) -> None:
@@ -314,6 +365,12 @@ class Buffer:
         self._use_fallback = not use_fast_path
 
     def update_ep_member(self):
+        if _USE_XPU:
+            # No QP/IPC handle table to rebuild; the XPU transport re-reads the
+            # active-rank mask on every dispatch.
+            if self._xpu_backend is not None:
+                self._xpu_backend.update_ep_member()
+            return
         self.connect(True)
 
     def _is_mooncake_backend(self) -> bool:
@@ -360,6 +417,13 @@ class Buffer:
         num_ranks: int,
         num_experts: int,
     ) -> int:
+        if _USE_XPU:
+            from mooncake._xpu_backend import ep_buffer_size_hint
+
+            return ep_buffer_size_hint(
+                num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+            )
+
         from mooncake.ep import get_ep_buffer_size_hint
 
         return get_ep_buffer_size_hint(
@@ -405,9 +469,22 @@ class Buffer:
                 )
 
         if use_fp8 is None:
-            use_fp8 = not _USE_MACA
+            use_fp8 = not (_USE_MACA or _USE_XPU)
         elif _USE_MACA and use_fp8:
             raise NotImplementedError("FP8 dispatch is not supported on MACA")
+        elif _USE_XPU and use_fp8:
+            # Intel XPU has no FP8 E4M3 dispatch path (neither the ISHMEM
+            # kernels nor a scaled fallback consumer).  Degrade to BF16 rather
+            # than fail, matching how the XPU DeepEP port handles use_fp8.
+            import warnings
+
+            warnings.warn(
+                "FP8 dispatch is not supported on Intel XPU; "
+                "falling back to BF16.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            use_fp8 = False
 
         # MUSA and MACA use split SEND/RECV launches because they do not expose
         # CUDA cooperative-grid synchronization. Only MACA adds a phase fence.
@@ -450,6 +527,24 @@ class Buffer:
                 and active_ranks.numel() == backend_active_ranks.numel()
             ):
                 active_ranks.copy_(backend_active_ranks)
+        elif self._xpu_backend is not None:
+            (
+                packed_recv_x,
+                packed_recv_x_scales,
+                packed_recv_count,
+                packed_recv_src_info,
+                packed_recv_layout_range,
+                event,
+                hook,
+            ) = self._xpu_backend.dispatch(
+                x,
+                topk_idx,
+                num_max_dispatch_tokens_per_rank,
+                num_experts,
+                use_fp8,
+                async_finish,
+                return_recv_hook,
+            )
         else:
             num_local_experts = num_experts // self.group_size
             packed_recv_x = torch.empty(
@@ -616,6 +711,17 @@ class Buffer:
                 and active_ranks.numel() == backend_active_ranks.numel()
             ):
                 active_ranks.copy_(backend_active_ranks)
+        elif self._xpu_backend is not None:
+            combined_x, event, hook = self._xpu_backend.combine(
+                x,
+                topk_idx,
+                topk_weights,
+                handle,
+                zero_copy,
+                async_finish,
+                return_recv_hook,
+                out,
+            )
         else:
             assert x.size(0) == num_experts // self.group_size
             assert x.size(1) == self.group_size * num_max_dispatch_tokens_per_rank
@@ -689,10 +795,10 @@ class Buffer:
     # -----------------
     class _DummyEvent:
         def current_stream_wait(self, stream_ptr: Optional[int] = None):
-            torch.cuda.synchronize()
+            _device_module().synchronize()
 
         def synchronize(self):
-            torch.cuda.synchronize()
+            _device_module().synchronize()
 
     @staticmethod
     def _fp8_cast(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
