@@ -73,7 +73,7 @@ struct SessionHeader {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
 static bool isCudaMemory(void* addr) {
     cudaPointerAttributes attributes;
     auto status = cudaPointerGetAttributes(&attributes, addr);
@@ -250,7 +250,7 @@ struct ServerSession : public std::enable_shared_from_this<ServerSession> {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
         cuda_device = getCudaDeviceId(addr);
         if (cuda_device >= 0) {
             dram_buffer = new char[buffer_size];
@@ -279,7 +279,7 @@ struct ServerSession : public std::enable_shared_from_this<ServerSession> {
                 const asio::error_code& ec, std::size_t transferred_bytes) {
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
                 if (cuda_device >= 0) {
                     delete[] dram_buffer;
                 }
@@ -323,7 +323,7 @@ struct ServerSession : public std::enable_shared_from_this<ServerSession> {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
         cuda_device = getCudaDeviceId(addr);
         if (cuda_device >= 0) {
             dram_buffer = new char[buffer_size];
@@ -352,7 +352,7 @@ struct ServerSession : public std::enable_shared_from_this<ServerSession> {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
                 if (cuda_device >= 0) {
                     cudaSetDevice(cuda_device);
 #ifdef USE_MACA
@@ -639,7 +639,7 @@ struct ClientSession : public std::enable_shared_from_this<ClientSession> {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
         cuda_device = getCudaDeviceId(addr);
         if (cuda_device >= 0) {
             dram_buffer = new char[buffer_size];
@@ -659,7 +659,7 @@ struct ClientSession : public std::enable_shared_from_this<ClientSession> {
                         << " (value: " << ec.value() << ")";
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
                     if (cuda_device >= 0) delete[] dram_buffer;
 #endif
                     finalize(TransferStatusEnum::FAILED, false);
@@ -668,7 +668,7 @@ struct ClientSession : public std::enable_shared_from_this<ClientSession> {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
                 if (cuda_device >= 0) {
                     cudaSetDevice(cuda_device);
 #ifdef USE_MACA
@@ -735,7 +735,7 @@ struct ClientSession : public std::enable_shared_from_this<ClientSession> {
 
 #if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
     defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX)
+    defined(USE_COREX) || defined(USE_XPU)
         cuda_device = getCudaDeviceId(addr);
         if (cuda_device >= 0) {
             dram_buffer = new char[buffer_size];

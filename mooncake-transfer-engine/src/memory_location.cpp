@@ -30,9 +30,9 @@ std::string genGpuNodeName(int node) {
     return kWildcardLocation;
 }
 
-#if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
-    defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX) || defined(USE_SUNRISE)
+#if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||      \
+    defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) ||     \
+    defined(USE_COREX) || defined(USE_SUNRISE) || defined(USE_XPU)
 // A GPU-less host (e.g. an RDMA-only sidecar) has no device for
 // cudaPointerGetAttributes to classify, yet a CUDA-enabled build probes
 // every buffer, each call failing and logging a per-buffer ERROR that
@@ -53,9 +53,9 @@ const std::vector<MemoryLocationEntry> getMemoryLocation(void *start,
                                                          bool only_first_page) {
     std::vector<MemoryLocationEntry> entries;
 
-#if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||  \
-    defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) || \
-    defined(USE_COREX) || defined(USE_SUNRISE)
+#if defined(USE_CUDA) || defined(USE_MUSA) || defined(USE_HIP) ||      \
+    defined(USE_MLU) || defined(USE_MACA) || defined(USE_HYGON) ||     \
+    defined(USE_COREX) || defined(USE_SUNRISE) || defined(USE_XPU)
     static const bool cuda_device_present = detectCudaDevicePresent();
 
     if (cuda_device_present) {

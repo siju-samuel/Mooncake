@@ -550,6 +550,24 @@ int RdmaContext::exportDmabuf(void *addr, DmabufExport &out) {
         // allocation base, plus any offset hsa returned for the export.
         out.offset = (uintptr_t)addr - (uintptr_t)allocBase + hsa_dmabuf_offset;
     }
+#elif defined(USE_XPU)
+    // Intel XPU: export a dma_buf fd from the Level Zero allocation so the
+    // caller can register it with ibv_reg_dmabuf_mr (GPU-direct RDMA). Host
+    // memory falls through to the plain ibv_reg_mr path.
+    if (mooncake::xpu::isDeviceMemory(addr)) {
+        // exportDmaBufFd() exports the whole allocation, so addr is its base
+        // and the offset within the exported region is zero. Size is not known
+        // here; Level Zero derives it from the allocation itself.
+        int dmabuf_fd = mooncake::xpu::exportDmaBufFd(addr, 0);
+        if (dmabuf_fd < 0) {
+            LOG(ERROR) << "Failed to export dma_buf fd for XPU memory "
+                       << (uintptr_t)addr;
+            return ERR_CONTEXT;
+        }
+        out.method = DmabufExport::Method::kDmabufReg;
+        out.fd = dmabuf_fd;
+        out.offset = 0;
+    }
 #else
     out.method = DmabufExport::Method::kHostReg;
 #endif
