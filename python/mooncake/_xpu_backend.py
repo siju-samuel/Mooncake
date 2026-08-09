@@ -310,7 +310,9 @@ class _CollectiveTransport:
             per_rank > 0
         )
 
-        self._next_combine_buffer = torch.empty_like(recv_x)
+        # Allocated on demand by get_next_combine_buffer(): it is only used by
+        # the zero-copy combine path, and eagerly reserving a second
+        # capacity-sized buffer here costs as much as recv_x itself.
         return (
             recv_x,
             None,  # no FP8 scales
@@ -336,7 +338,10 @@ class _CollectiveTransport:
         num_ranks = self.group_size
         num_local = num_experts // num_ranks
         num_tokens = topk_idx.size(0)
-        expert_out = self._next_combine_buffer if zero_copy else x
+        if zero_copy:
+            expert_out = self.get_next_combine_buffer(handle)
+        else:
+            expert_out = x
         if expert_out.dtype != torch.bfloat16:
             expert_out = expert_out.to(torch.bfloat16)
 
@@ -355,20 +360,41 @@ class _CollectiveTransport:
             all_w, topk_weights.contiguous(), group=self.group
         )
 
-        # Rebuild (expert, slot) -> (src_rank, token) from the handle.
+        # Rebuild (expert, slot) -> (src_rank, token) from the handle. Only the
+        # first counts[e, r] slots of each (expert, src_rank) span hold real
+        # tokens; the rest of the capacity-sized buffer is padding. Work on the
+        # occupied slots alone -- gathering the whole buffer would allocate
+        # hundreds of MB of transients per layer and exhaust Level Zero.
         counts = (layout_range & 0xFFFFFFFF).to(torch.int64)  # [num_local, num_ranks]
         begins = (layout_range >> 32) & 0xFFFFFFFF
-        slot = torch.arange(src_info.size(1), device=src_info.device).view(1, -1)
-        # slot belongs to src_rank r iff begins[r] <= slot < begins[r]+counts[r].
-        in_range = (slot.unsqueeze(1) >= begins.unsqueeze(-1)) & (
-            slot.unsqueeze(1) < (begins + counts).unsqueeze(-1)
-        ) & (counts > 0).unsqueeze(-1)
-        valid = in_range.any(dim=1) & (src_info >= 0)
-        src_rank = in_range.to(torch.int64).argmax(dim=1)
+        capacity = src_info.size(1)
+        max_slot = int(counts.max().item()) if counts.numel() else 0
+        if max_slot == 0:
+            combined = torch.zeros(
+                (num_tokens, hidden), dtype=torch.bfloat16, device=x.device
+            )
+            if out is not None:
+                out.copy_(combined)
+                combined = out
+            return combined, _StreamOrderedEvent(), (lambda: None)
 
-        e_idx, s_idx = valid.nonzero(as_tuple=True)
-        r_sel = src_rank[e_idx, s_idx]
+        # [num_local, num_ranks, max_slot] view of the occupied slots.
+        off = torch.arange(max_slot, device=src_info.device)
+        keep = off.view(1, 1, -1) < counts.unsqueeze(-1)
+        slot = (begins.unsqueeze(-1) + off.view(1, 1, -1)).clamp_(max=capacity - 1)
+
+        e_idx, r_sel, k_idx = keep.nonzero(as_tuple=True)
+        s_idx = slot[e_idx, r_sel, k_idx]
         t_sel = src_info[e_idx, s_idx].to(torch.int64)
+        # Guard against a stale/padded src_info entry indexing out of range.
+        ok = (t_sel >= 0) & (t_sel < num_tokens)
+        if not bool(ok.all()):
+            e_idx, r_sel, s_idx, t_sel = (
+                e_idx[ok],
+                r_sel[ok],
+                s_idx[ok],
+                t_sel[ok],
+            )
         expert_id = self.rank * num_local + e_idx
 
         # This expert's routing weight for that token (0 if not routed there).
@@ -379,10 +405,13 @@ class _CollectiveTransport:
         send = torch.zeros(
             (num_ranks, num_tokens, hidden), dtype=torch.bfloat16, device=x.device
         )
+        # Accumulate in bf16 to halve the transient footprint; each destination
+        # token sums at most num_topk contributions, so the error stays within
+        # the bf16 rounding the rest of this path already accepts.
         send.reshape(num_ranks * num_tokens, hidden).index_add_(
             0,
             r_sel * num_tokens + t_sel,
-            (expert_out[e_idx, s_idx].float() * w).to(torch.bfloat16),
+            expert_out[e_idx, s_idx] * w.to(torch.bfloat16),
         )
         dist.all_reduce(send, group=self.group)
         combined = send[self.rank]
