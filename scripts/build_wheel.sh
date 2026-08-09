@@ -193,6 +193,7 @@ MIGRATED_PYTHON_MODULES=(
     ep.py
     mooncake_ep_buffer.py
     mooncake_elastic_buffer.py
+    _xpu_backend.py
 )
 RESHARD_SOURCE_DIR="mooncake-reshard/python/mooncake/reshard"
 RESHARD_STAGING_DIR="$(pwd)/mooncake-wheel/mooncake/reshard"
