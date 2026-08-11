@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -263,7 +263,9 @@ class _CollectiveTransport:
 
         # Every rank contributes the same token count in sglang's masked path,
         # so gather straight into one tensor (no per-rank size exchange).
-        all_x = torch.empty((num_ranks, num_tokens, hidden), dtype=x.dtype, device=x.device)
+        all_x = torch.empty(
+            (num_ranks, num_tokens, hidden), dtype=x.dtype, device=x.device
+        )
         dist.all_gather_into_tensor(all_x, x.contiguous(), group=self.group)
         all_topk = torch.empty(
             (num_ranks, num_tokens, topk_idx.size(1)),
@@ -277,9 +279,11 @@ class _CollectiveTransport:
         first_expert = self.rank * num_local
         # routed[e, r, t] = token t of rank r goes to local expert e
         routed = (
-            all_topk.unsqueeze(0) == (first_expert + torch.arange(
-                num_local, device=x.device, dtype=topk_idx.dtype
-            )).view(num_local, 1, 1, 1)
+            all_topk.unsqueeze(0)
+            == (
+                first_expert
+                + torch.arange(num_local, device=x.device, dtype=topk_idx.dtype)
+            ).view(num_local, 1, 1, 1)
         ).any(-1)
 
         flat = routed.reshape(num_local, num_ranks * num_tokens)
@@ -356,9 +360,7 @@ class _CollectiveTransport:
             dtype=topk_weights.dtype,
             device=topk_weights.device,
         )
-        dist.all_gather_into_tensor(
-            all_w, topk_weights.contiguous(), group=self.group
-        )
+        dist.all_gather_into_tensor(all_w, topk_weights.contiguous(), group=self.group)
 
         # Rebuild (expert, slot) -> (src_rank, token) from the handle. Only the
         # first counts[e, r] slots of each (expert, src_rank) span hold real
