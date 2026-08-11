@@ -61,7 +61,10 @@ def worker(rank: int, world: int, q):
             MAXTOK, HIDDEN, world, NUM_EXPERTS
         )
         buf = deep_ep.Buffer(
-            dist.group.WORLD, 0, nbytes, low_latency_mode=True,
+            dist.group.WORLD,
+            0,
+            nbytes,
+            low_latency_mode=True,
             num_qps_per_rank=max(1, NUM_EXPERTS // world),
         )
         print(f"[r{rank}] STAGE ok: {stage}", flush=True)
@@ -89,7 +92,7 @@ def worker(rank: int, world: int, q):
         print(f"[r{rank}] STAGE ok: {stage} out={tuple(out.shape)}", flush=True)
 
         q.put((rank, True, "all stages", ""))
-    except Exception as exc:
+    except Exception:
         import traceback
 
         q.put((rank, False, stage, traceback.format_exc()[-1200:]))
