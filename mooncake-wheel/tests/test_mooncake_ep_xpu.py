@@ -16,8 +16,8 @@ os.environ["TORCH_SYMMMEM"] = "XPU"
 os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 os.environ.setdefault("MASTER_PORT", os.environ.get("MC_PORT", "29601"))
 
-import torch
-import torch.distributed as dist
+import torch  # noqa: E402  (env vars must be set before torch)
+import torch.distributed as dist  # noqa: E402  (env vars must be set before torch)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
 
@@ -34,7 +34,7 @@ if os.environ.get("ZE_AFFINITY_MASK"):
 torch.xpu.set_device(dev)
 dist.init_process_group(backend="xccl", rank=rank, world_size=world)
 
-from mooncake.mooncake_ep_buffer import Buffer
+from mooncake.mooncake_ep_buffer import Buffer  # noqa: E402  (env vars must be set before torch)
 
 NUM_EXPERTS = int(os.environ.get("MC_EXPERTS", "16"))
 HIDDEN = int(os.environ.get("MC_HIDDEN", "512"))
@@ -86,7 +86,9 @@ def run(transport: str) -> bool:
     assert recv_x.shape[0] == n_local, (recv_x.shape, n_local)
     assert recv_cnt.shape == (n_local,), recv_cnt.shape
     assert len(handle) == 5, handle
-    log(f"dispatch OK recv_x={tuple(recv_x.shape)} {recv_x.dtype} cnt={recv_cnt.tolist()}")
+    log(
+        f"dispatch OK recv_x={tuple(recv_x.shape)} {recv_x.dtype} cnt={recv_cnt.tolist()}"
+    )
 
     # Expert compute: identity, so combine must reproduce sum(w) * x per token.
     combined, event2, hook2 = buf.combine(
@@ -107,18 +109,33 @@ def run(transport: str) -> bool:
     diff = (combined.float() - expect.float()).abs()
     rel = (diff.sum() / expect.float().abs().sum().clamp(min=1e-6)).item()
     ok = rel < 0.02
-    log(f"combine OK shape={tuple(combined.shape)} rel_err={rel:.5f} -> "
-        f"{'PASS' if ok else 'FAIL'}")
+    log(
+        f"combine OK shape={tuple(combined.shape)} rel_err={rel:.5f} -> "
+        f"{'PASS' if ok else 'FAIL'}"
+    )
 
     # Idempotence / reuse: a second round must also work.
     recv_x2, recv_cnt2, handle2, ev3, _ = buf.dispatch(
-        x, topk_idx, active_ranks, MAXTOK, NUM_EXPERTS, -1,
-        use_fp8=True, async_finish=False, return_recv_hook=False,
+        x,
+        topk_idx,
+        active_ranks,
+        MAXTOK,
+        NUM_EXPERTS,
+        -1,
+        use_fp8=True,
+        async_finish=False,
+        return_recv_hook=False,
     )
     ev3.current_stream_wait()
     combined2, ev4, _ = buf.combine(
-        recv_x2, topk_idx, topk_w, active_ranks, -1, handle2,
-        async_finish=False, return_recv_hook=False,
+        recv_x2,
+        topk_idx,
+        topk_w,
+        active_ranks,
+        -1,
+        handle2,
+        async_finish=False,
+        return_recv_hook=False,
     )
     ev4.current_stream_wait()
     same = torch.equal(combined, combined2)
@@ -136,8 +153,9 @@ for t in os.environ.get("MC_TRANSPORTS", "ishmem,collective").split(","):
         continue
     try:
         results[t] = run(t)
-    except Exception as exc:
+    except Exception:
         import traceback
+
         if rank == 0:
             traceback.print_exc()
         results[t] = False
@@ -147,7 +165,9 @@ if rank == 0:
     print("\n===== SUMMARY =====", flush=True)
     for t, ok in results.items():
         print(f"  {t:12s} {'PASS' if ok else 'FAIL'}", flush=True)
-    print("ALL_PASS" if results and all(results.values()) else "SOME_FAILED", flush=True)
+    print(
+        "ALL_PASS" if results and all(results.values()) else "SOME_FAILED", flush=True
+    )
 
 dist.barrier()
 os._exit(0 if results and all(results.values()) else 1)
