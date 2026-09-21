@@ -249,6 +249,61 @@ TEST_F(XpuTransportTest, GetAllocBaseReportsOffset) {
     cudaFree(dev_ptr);
 }
 
+// Every other test allocates through this shim, so the pointer and the query
+// share one Level Zero context. The real caller does not: PyTorch allocates
+// through SYCL, which owns a context of its own, while the shim classifies and
+// exports against the context it created. An end-to-end TCP transfer of a
+// torch.xpu tensor covers that for zeMemGetAllocProperties, but the TCP path
+// never exports a dma_buf -- so cross-context zeMemGetIpcHandle is the one
+// call on the RDMA path with no coverage. A second context reproduces it
+// without linking a SYCL runtime.
+//
+// If this fails, isDeviceMemory() reports false for real tensors,
+// getMemoryLocation() files the KV cache as host memory, and the dma_buf
+// export is skipped -- silently, since cudaPointerGetAttributes() returns
+// success with type cudaMemoryTypeUnregistered.
+TEST_F(XpuTransportTest, ClassifiesAndExportsMemoryFromAnotherContext) {
+    ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+    ASSERT_EQ(mooncake::xpu::ensureInitialized(), 0);
+
+    uint32_t driver_count = 1;
+    ze_driver_handle_t driver = nullptr;
+    ASSERT_EQ(zeDriverGet(&driver_count, &driver), ZE_RESULT_SUCCESS);
+    ASSERT_NE(driver, nullptr);
+
+    ze_context_desc_t ctx_desc = {};
+    ctx_desc.stype = ZE_STRUCTURE_TYPE_CONTEXT_DESC;
+    ze_context_handle_t foreign_context = nullptr;
+    ASSERT_EQ(zeContextCreate(driver, &ctx_desc, &foreign_context),
+              ZE_RESULT_SUCCESS);
+
+    ze_device_handle_t device = mooncake::xpu::getDevice(0);
+    ASSERT_NE(device, nullptr);
+
+    const size_t size = 1 << 20;
+    ze_device_mem_alloc_desc_t mem_desc = {};
+    mem_desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    void *foreign_ptr = nullptr;
+    ASSERT_EQ(zeMemAllocDevice(foreign_context, &mem_desc, size, 64, device,
+                               &foreign_ptr),
+              ZE_RESULT_SUCCESS);
+
+    EXPECT_TRUE(mooncake::xpu::isDeviceMemory(foreign_ptr));
+
+    void *base = nullptr;
+    size_t alloc_size = 0;
+    EXPECT_EQ(mooncake::xpu::getAllocBase(foreign_ptr, &base, &alloc_size), 0);
+    EXPECT_EQ(base, foreign_ptr);
+    EXPECT_GE(alloc_size, size);
+
+    int fd = mooncake::xpu::exportDmaBufFd(foreign_ptr, size);
+    EXPECT_GE(fd, 0);
+    if (fd >= 0) close(fd);
+
+    zeMemFree(foreign_context, foreign_ptr);
+    zeContextDestroy(foreign_context);
+}
+
 // ---------- Asynchronous copies / streams ----------
 
 // A copy must be complete once the stream is synchronised. Also catches an

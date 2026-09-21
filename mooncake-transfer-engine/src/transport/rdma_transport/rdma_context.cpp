@@ -625,6 +625,24 @@ int RdmaContext::exportDmabuf(void *addr, size_t length, DmabufExport &out) {
                        << (uintptr_t)addr;
             return ERR_CONTEXT;
         }
+        // zeMemGetIpcHandle() exports the allocation containing addr and takes
+        // no range, so unlike the CUDA path there is no way to re-export
+        // [addr, addr + length) when the reported allocation is smaller.
+        // Refuse here instead of handing ibv_reg_dmabuf_mr() an fd shorter
+        // than the region, which fails with EINVAL. Reachable once
+        // expandable_segments is enabled on the XPU caching allocator, where
+        // the reported allocation is one growth chunk.
+        uint64_t exportOffset = (uintptr_t)addr - (uintptr_t)allocBase;
+        if (exportOffset + length > allocSize) {
+            LOG(ERROR) << "XPU dma_buf export for " << (uintptr_t)addr
+                       << " length " << length
+                       << " exceeds its allocation (base="
+                       << (uintptr_t)allocBase << " size=" << allocSize
+                       << " offset=" << exportOffset
+                       << "); disable expandable_segments for the XPU "
+                          "allocator to register this buffer";
+            return ERR_CONTEXT;
+        }
         int dmabuf_fd = mooncake::xpu::exportDmaBufFd(allocBase, allocSize);
         if (dmabuf_fd < 0) {
             LOG(ERROR) << "Failed to export dma_buf fd for XPU memory "
@@ -633,7 +651,7 @@ int RdmaContext::exportDmabuf(void *addr, size_t length, DmabufExport &out) {
         }
         out.method = DmabufExport::Method::kDmabufReg;
         out.fd = dmabuf_fd;
-        out.offset = (uintptr_t)addr - (uintptr_t)allocBase;
+        out.offset = exportOffset;
     }
 #else
     out.method = DmabufExport::Method::kHostReg;
